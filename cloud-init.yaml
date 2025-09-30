@@ -1,0 +1,320 @@
+#cloud-config
+
+# OpenVPN, Docker, and Ollama Installation for OCI ARM Instance
+# This script installs OpenVPN server (site-to-site VPN), Docker, and Ollama
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - openvpn
+  - easy-rsa
+  - iptables
+  - firewalld
+  - docker
+  - docker-compose
+  - git
+  - curl
+  - wget
+  - vim
+  - htop
+
+write_files:
+  - path: /root/setup-openvpn.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -e
+
+      echo "=== OpenVPN Setup Script ==="
+
+      # Enable IP forwarding
+      echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+      sysctl -p
+
+      # Setup Easy-RSA
+      cd /usr/share/easy-rsa/3
+      ./easyrsa init-pki
+
+      # Build CA (non-interactive)
+      echo "yes" | ./easyrsa build-ca nopass << EOF
+      OCI-VPN-CA
+      EOF
+
+      # Generate server certificate
+      echo "yes" | ./easyrsa build-server-full server nopass
+
+      # Generate Diffie-Hellman parameters
+      ./easyrsa gen-dh
+
+      # Generate HMAC signature
+      openvpn --genkey secret /etc/openvpn/server/ta.key
+
+      # Copy certificates to OpenVPN directory
+      cp pki/ca.crt /etc/openvpn/server/
+      cp pki/issued/server.crt /etc/openvpn/server/
+      cp pki/private/server.key /etc/openvpn/server/
+      cp pki/dh.pem /etc/openvpn/server/
+
+      # Create OpenVPN server configuration
+      cat > /etc/openvpn/server/server.conf << 'OVPNCONF'
+      # OpenVPN Server Configuration
+      port ${openvpn_port}
+      proto udp
+      dev tun
+
+      ca ca.crt
+      cert server.crt
+      key server.key
+      dh dh.pem
+      tls-auth ta.key 0
+
+      # VPN subnet (avoids K3s 10.42.0.0/16 and 10.43.0.0/16)
+      server 192.168.100.0 255.255.255.0
+
+      # Push routes to VPN clients for OCI VCN
+      push "route 172.16.0.0 255.240.0.0"
+
+      # Client-specific configuration directory
+      client-config-dir /etc/openvpn/server/ccd
+
+      # Allow clients to reach each other
+      client-to-client
+
+      # Topology for site-to-site
+      topology subnet
+
+      # Keep alive
+      keepalive 10 120
+
+      # Cryptographic options
+      cipher AES-256-GCM
+      auth SHA256
+
+      # Compression
+      compress lz4-v2
+      push "compress lz4-v2"
+
+      # User and group
+      user nobody
+      group nobody
+
+      # Persist options
+      persist-key
+      persist-tun
+
+      # Logging
+      status /var/log/openvpn/openvpn-status.log
+      log-append /var/log/openvpn/openvpn.log
+      verb 3
+
+      # Explicit exit notify
+      explicit-exit-notify 1
+      OVPNCONF
+
+      # Create log directory
+      mkdir -p /var/log/openvpn
+
+      # Create client-config directory for site-to-site routing
+      mkdir -p /etc/openvpn/server/ccd
+
+      # Configure firewall
+      systemctl start firewalld
+      systemctl enable firewalld
+
+      # Add OpenVPN service to firewall
+      firewall-cmd --permanent --add-service=openvpn
+      firewall-cmd --permanent --add-port=${openvpn_port}/udp
+
+      # Add Ollama port (11434)
+      firewall-cmd --permanent --add-port=11434/tcp
+
+      # Add Docker ports
+      firewall-cmd --permanent --add-service=docker
+
+      # Enable masquerading for VPN traffic
+      firewall-cmd --permanent --add-masquerade
+      firewall-cmd --permanent --direct --add-rule ipv4 nat POSTROUTING 0 -s 192.168.100.0/24 -o ens3 -j MASQUERADE
+      firewall-cmd --reload
+
+      # Enable and start OpenVPN
+      systemctl enable openvpn-server@server
+      systemctl start openvpn-server@server
+
+      echo "=== OpenVPN Server Setup Complete ==="
+      echo "Server is running. Generate client certificates with:"
+      echo "cd /usr/share/easy-rsa/3"
+      echo "./easyrsa build-client-full client1 nopass"
+      echo ""
+      echo "Client configuration will be in /root/client-configs/"
+
+  - path: /root/generate-client-config.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Script to generate client configuration
+
+      if [ -z "$1" ]; then
+        echo "Usage: $0 <client-name>"
+        exit 1
+      fi
+
+      CLIENT_NAME=$1
+      EASYRSA_DIR="/usr/share/easy-rsa/3"
+      OUTPUT_DIR="/root/client-configs"
+
+      mkdir -p $OUTPUT_DIR
+
+      # Generate client certificate
+      cd $EASYRSA_DIR
+      echo "yes" | ./easyrsa build-client-full $CLIENT_NAME nopass
+
+      # Get server public IP
+      PUBLIC_IP=$(curl -s http://169.254.169.254/opc/v1/instance/metadata | grep -oP '"publicIp":\s*"\K[^"]+')
+
+      # Create client config
+      cat > $OUTPUT_DIR/$CLIENT_NAME.ovpn << EOF
+      client
+      dev tun
+      proto udp
+      remote $PUBLIC_IP ${openvpn_port}
+      resolv-retry infinite
+      nobind
+      persist-key
+      persist-tun
+      remote-cert-tls server
+      cipher AES-256-GCM
+      auth SHA256
+      compress lz4-v2
+      verb 3
+      key-direction 1
+
+      <ca>
+      $(cat $EASYRSA_DIR/pki/ca.crt)
+      </ca>
+
+      <cert>
+      $(sed -n '/BEGIN CERTIFICATE/,/END CERTIFICATE/p' $EASYRSA_DIR/pki/issued/$CLIENT_NAME.crt)
+      </cert>
+
+      <key>
+      $(cat $EASYRSA_DIR/pki/private/$CLIENT_NAME.key)
+      </key>
+
+      <tls-auth>
+      $(cat /etc/openvpn/server/ta.key)
+      </tls-auth>
+      EOF
+
+      echo "Client configuration created: $OUTPUT_DIR/$CLIENT_NAME.ovpn"
+      echo "Transfer this file to your client device and import it into OpenVPN client"
+
+  - path: /root/setup-site-to-site.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Configure site-to-site VPN for K3s cluster
+      # Usage: ./setup-site-to-site.sh <client-name> <local-network-cidr>
+
+      if [ -z "$1" ] || [ -z "$2" ]; then
+        echo "Usage: $0 <client-name> <local-network-cidr>"
+        echo "Example: $0 k3s-cluster 192.168.0.0/24"
+        exit 1
+      fi
+
+      CLIENT_NAME=$1
+      LOCAL_CIDR=$2
+
+      # Create client-specific config to route local network
+      cat > /etc/openvpn/server/ccd/$CLIENT_NAME << EOF
+      # Route to local network behind this client
+      iroute $${LOCAL_CIDR%/*} $${LOCAL_CIDR#*/}
+      EOF
+
+      # Add route in OpenVPN server config
+      grep -q "route $LOCAL_CIDR" /etc/openvpn/server/server.conf || \
+        sed -i "/^topology subnet/a route $LOCAL_CIDR" /etc/openvpn/server/server.conf
+
+      # Restart OpenVPN
+      systemctl restart openvpn-server@server
+
+      echo "Site-to-site configuration created for $CLIENT_NAME"
+      echo "Local network $LOCAL_CIDR will be accessible through VPN"
+      echo ""
+      echo "On your local gateway (Raspberry Pi), you need to:"
+      echo "1. Enable IP forwarding: echo 1 > /proc/sys/net/ipv4/ip_forward"
+      echo "2. Add route to OCI network: ip route add 172.16.0.0/12 via 192.168.100.1"
+      echo "3. Configure NAT if needed for other devices in your LAN"
+
+  - path: /root/setup-docker.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -e
+
+      echo "=== Docker Setup ==="
+
+      # Enable and start Docker
+      systemctl enable docker
+      systemctl start docker
+
+      # Add opc user to docker group
+      usermod -aG docker opc
+
+      # Configure Docker to start on boot
+      systemctl enable docker.service
+      systemctl enable containerd.service
+
+      echo "Docker installed and configured"
+      docker --version
+
+  - path: /root/setup-ollama.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -e
+
+      echo "=== Ollama Setup (ARM64) ==="
+
+      # Install Ollama for ARM64
+      curl -fsSL https://ollama.com/install.sh | sh
+
+      # Create systemd service for Ollama
+      cat > /etc/systemd/system/ollama.service << 'EOF'
+      [Unit]
+      Description=Ollama Service
+      After=network-online.target
+
+      [Service]
+      ExecStart=/usr/local/bin/ollama serve
+      User=opc
+      Group=opc
+      Restart=always
+      RestartSec=3
+      Environment="OLLAMA_HOST=0.0.0.0:11434"
+
+      [Install]
+      WantedBy=default.target
+      EOF
+
+      # Enable and start Ollama
+      systemctl daemon-reload
+      systemctl enable ollama
+      systemctl start ollama
+
+      echo "Ollama installed and running on port 11434"
+      echo "Test with: curl http://localhost:11434/api/version"
+      echo ""
+      echo "To pull a model: ollama pull llama3.2:1b"
+      echo "Recommended small models for ARM:"
+      echo "  - llama3.2:1b (1.3GB)"
+      echo "  - llama3.2:3b (2GB)"
+      echo "  - phi3:mini (2.3GB)"
+      echo "  - gemma2:2b (1.6GB)"
+
+runcmd:
+  - /root/setup-openvpn.sh
+  - /root/setup-docker.sh
+  - /root/setup-ollama.sh
+
+final_message: "System setup complete. OpenVPN, Docker, and Ollama are ready after $UPTIME seconds"
