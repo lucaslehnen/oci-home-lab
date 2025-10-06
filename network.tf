@@ -1,7 +1,7 @@
 # Virtual Cloud Network (Class B)
 resource "oci_core_vcn" "main" {
   compartment_id = var.compartment_ocid
-  cidr_blocks    = ["172.16.0.0/12"]
+  cidr_blocks    = ["172.16.0.0/16"]
   display_name   = "vcn-main"
   dns_label      = "vcnmain"
   is_ipv6enabled = false
@@ -91,7 +91,7 @@ resource "oci_core_security_list" "main" {
 
   ingress_security_rules {
     protocol    = "1" # ICMP
-    source      = "172.16.0.0/12"
+    source      = "172.16.0.0/16"
     stateless   = false
 
     icmp_options {
@@ -99,41 +99,9 @@ resource "oci_core_security_list" "main" {
     }
   }
 
-  # Ingress - OpenVPN UDP
-  ingress_security_rules {
-    protocol    = "17" # UDP
-    source      = "0.0.0.0/0"
-    stateless   = false
-
-    udp_options {
-      min = 1194
-      max = 1194
-    }
-  }
-
-  # Ingress - OpenVPN TCP (alternative)
-  ingress_security_rules {
-    protocol    = "6" # TCP
-    source      = "0.0.0.0/0"
-    stateless   = false
-
-    tcp_options {
-      min = 1194
-      max = 1194
-    }
-  }
-
-  # Ingress - Ollama API
-  ingress_security_rules {
-    protocol    = "6" # TCP
-    source      = "0.0.0.0/0"
-    stateless   = false
-
-    tcp_options {
-      min = 11434
-      max = 11434
-    }
-  }
+  # Note: With Cloudflare Tunnel, Ollama and other services are NOT exposed directly
+  # All traffic goes through Cloudflare's network with Zero Trust authentication
+  # Only SSH remains open for emergency access
 }
 
 # Subnet

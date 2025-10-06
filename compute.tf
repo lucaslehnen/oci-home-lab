@@ -28,15 +28,13 @@ resource "oci_core_instance" "main" {
 
   create_vnic_details {
     subnet_id        = oci_core_subnet.main.id
-    assign_public_ip = true
+    assign_public_ip = "true"
     display_name     = "vnic-main"
   }
 
   metadata = {
     ssh_authorized_keys = var.ssh_public_key
-    user_data = base64encode(templatefile("${path.module}/cloud-init.yaml", {
-      openvpn_port = var.openvpn_port
-    }))
+    user_data           = base64encode(file("${path.module}/cloud-init.yaml"))
   }
 
   preserve_boot_volume = false

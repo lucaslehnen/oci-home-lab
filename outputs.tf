@@ -28,17 +28,31 @@ output "ssh_connection" {
   value       = "ssh opc@${oci_core_instance.main.public_ip}"
 }
 
-output "openvpn_info" {
-  description = "OpenVPN server information"
+output "cloudflare_tunnel_info" {
+  description = "Cloudflare Tunnel setup information"
   value = {
-    status = "OpenVPN server is being configured via cloud-init (takes ~5-10 minutes)"
-    port   = var.openvpn_port
+    status = "cloudflared is being installed via cloud-init (takes ~2-3 minutes)"
     setup_instructions = [
       "1. SSH into the instance: ssh opc@${oci_core_instance.main.public_ip}",
-      "2. Check OpenVPN status: sudo systemctl status openvpn-server@server",
-      "3. Generate client config: sudo /root/generate-client-config.sh client1",
-      "4. Download config: scp opc@${oci_core_instance.main.public_ip}:/root/client-configs/client1.ovpn .",
-      "5. Import the .ovpn file into your OpenVPN client (available for Windows, Mac, Linux, iOS, Android)"
+      "2. Authenticate with Cloudflare: cloudflared tunnel login",
+      "3. Create tunnel: cloudflared tunnel create oci-tunnel",
+      "4. Copy example config: cp /root/cloudflared-config-example.yml ~/.cloudflared/config.yml",
+      "5. Edit config with your tunnel ID and domains",
+      "6. Route DNS: cloudflared tunnel route dns oci-tunnel ollama.yourdomain.com",
+      "7. Run tunnel: cloudflared tunnel run oci-tunnel",
+      "8. Install as service: cloudflared service install",
+      "",
+      "See SETUP_CLOUDFLARE_TUNNEL.md for complete Zero Trust setup guide"
     ]
+  }
+}
+
+output "ollama_info" {
+  description = "Ollama service information"
+  value = {
+    status          = "Ollama is being installed via cloud-init (takes ~2-3 minutes)"
+    local_endpoint  = "http://localhost:11434"
+    access_method   = "Via Cloudflare Tunnel only (not exposed publicly)"
+    test_command    = "curl http://localhost:11434/api/version"
   }
 }

@@ -13,8 +13,8 @@ variable "fingerprint" {
   type        = string
 }
 
-variable "private_key_path" {
-  description = "Path to your private key file"
+variable "private_key" {
+  description = "OCI API private key content"
   type        = string
 }
 
@@ -48,23 +48,12 @@ variable "instance_shape" {
 variable "instance_ocpus" {
   description = "Number of OCPUs for flexible shapes (Always Free: up to 4 for ARM)"
   type        = number
-  default     = 4
+  default     = 1
 }
 
 variable "instance_memory_in_gbs" {
   description = "Amount of memory in GBs for flexible shapes (Always Free: up to 24GB for ARM)"
   type        = number
-  default     = 24
+  default     = 6
 }
 
-variable "openvpn_port" {
-  description = "Port for OpenVPN server"
-  type        = number
-  default     = 1194
-}
-
-variable "local_network_cidr" {
-  description = "CIDR of your local network (e.g., 192.168.0.0/24) for site-to-site VPN routing"
-  type        = string
-  default     = "192.168.0.0/24"
-}
