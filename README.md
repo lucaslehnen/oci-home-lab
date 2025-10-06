@@ -1,11 +1,11 @@
 # OCI Base Infrastructure
 
 Projeto Terraform para provisionar infraestrutura na Oracle Cloud Infrastructure (OCI) com:
-- **VPN Site-to-Site** via OpenVPN para conectar seu cluster K3s local
+- **Cloudflare Tunnel (Zero Trust)** para conectar seu cluster K3s local de forma segura
 - **Ollama** (LLM inference server) rodando em ARM
 - **Docker** para containers adicionais
 
-Ideal para conectar seu cluster Kubernetes local à nuvem OCI, permitindo que seus pods acessem Ollama e outros serviços rodando na OCI.
+Ideal para conectar seu cluster Kubernetes local à nuvem OCI via Zero Trust Network Access, permitindo que seus pods acessem Ollama e outros serviços de forma segura, sem portas abertas ou VPN tradicional.
 
 ---
 
@@ -28,18 +28,24 @@ Ideal para conectar seu cluster Kubernetes local à nuvem OCI, permitindo que se
           └──┤  K3s Cluster                                     │
              │  • Pods: 10.42.0.0/16                           │
              │  • Services: 10.43.0.0/16                       │
-             │  • OpenVPN Client instalado                     │
+             │  • Service Token para autenticação              │
              └──────────────────┬───────────────────────────────┘
                                 │
                     ┌───────────▼────────────┐
-                    │   Túnel VPN Criptografado
-                    │   192.168.100.0/24
-                    │   AES-256-GCM + SHA256
+                    │   DNS Query            │
+                    │   ollama.seudominio.com│
                     └───────────┬────────────┘
                                 │
                        ═════════▼═════════
-                         INTERNET
+                      CLOUDFLARE EDGE NETWORK
+                      (Zero Trust Gateway)
                        ═════════┬═════════
+                                │
+                      ┌─────────▼──────────┐
+                      │ Access Policies    │
+                      │ • Service Token ✓  │
+                      │ • TLS encryption   │
+                      └─────────┬──────────┘
                                 │
 ╔═══════════════════════════════▼══════════════════════════════════════════╗
 ║                    ORACLE CLOUD INFRASTRUCTURE                           ║
@@ -50,18 +56,18 @@ Ideal para conectar seu cluster Kubernetes local à nuvem OCI, permitindo que se
 ║  │  Instância ARM A1.Flex (Always Free)                           │    ║
 ║  │  • 4 OCPUs ARM64 + 24GB RAM                                    │    ║
 ║  │  • Oracle Linux 8                                               │    ║
-║  │  • IP Público: XXX.XXX.XXX.XXX                                 │    ║
+║  │  • IP Público: XXX.XXX.XXX.XXX (apenas SSH)                    │    ║
 ║  │  • IP Privado: 172.16.1.x                                      │    ║
 ║  └────────────────────────────────────────────────────────────────┘    ║
 ║         │                        │                         │             ║
 ║  ┌──────▼──────┐          ┌──────▼──────┐         ┌───────▼────────┐   ║
-║  │  OpenVPN    │          │   Ollama    │         │     Docker     │   ║
-║  │   Server    │          │   :11434    │         │   Containers   │   ║
+║  │ cloudflared │          │   Ollama    │         │     Docker     │   ║
+║  │   Tunnel    │──────────│   :11434    │         │   Containers   │   ║
 ║  │             │          │             │         │                │   ║
-║  │ 192.168.100.1│          │ LLM Models: │         │  • nginx       │   ║
-║  │             │          │ • llama3.2  │         │  • postgres    │   ║
-║  │ • Certs     │          │ • mistral   │         │  • redis       │   ║
-║  │ • Routing   │          │ • phi3      │         │  • custom...   │   ║
+║  │ • Sem porta │          │ LLM Models: │         │  • nginx       │   ║
+║  │   aberta    │          │ • llama3.2  │         │  • postgres    │   ║
+║  │ • TLS auto  │          │ • mistral   │         │  • redis       │   ║
+║  │ • Zero Trust│          │ • phi3      │         │  • custom...   │   ║
 ║  └─────────────┘          └─────────────┘         └────────────────┘   ║
 ║                                                                          ║
 ╚══════════════════════════════════════════════════════════════════════════╝
@@ -70,25 +76,27 @@ Ideal para conectar seu cluster Kubernetes local à nuvem OCI, permitindo que se
 │  FLUXO DE COMUNICAÇÃO                                                   │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
-│  1. K3s Pod → VPN Tunnel → Ollama                                      │
-│     curl http://172.16.1.x:11434/api/generate                          │
+│  1. K3s Pod → DNS → Cloudflare Edge → Cloudflare Tunnel → Ollama       │
+│     curl -H "CF-Access-Client-Id: xxx" \                               │
+│          -H "CF-Access-Client-Secret: xxx" \                           │
+│          https://ollama.seudominio.com/api/generate                    │
 │                                                                         │
-│  2. K3s Pod → VPN Tunnel → Docker Container                            │
-│     http://172.16.1.x:8080                                             │
+│  2. K3s Pod → Cloudflare → Docker Container                            │
+│     https://app.seudominio.com                                         │
 │                                                                         │
-│  3. OCI Services → VPN Tunnel → K3s Services (opcional)                │
-│     http://192.168.0.34:30000                                          │
+│  3. Navegador → Cloudflare (com autenticação) → OCI Services           │
+│     https://ssh.seudominio.com (SSH via browser)                       │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────┐
-│  SEGMENTAÇÃO DE REDES                                                   │
+│  SEGURANÇA ZERO TRUST                                                   │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  📍 Rede Local        192.168.0.0/24      Sua LAN                       │
-│  🔐 Túnel VPN         192.168.100.0/24    OpenVPN (sem conflito K3s)   │
-│  ☁️  VCN OCI          172.16.0.0/12       Classe B privada             │
-│  🐳 K3s Pods          10.42.0.0/16        Kubernetes pods              │
-│  ⚙️  K3s Services     10.43.0.0/16        Kubernetes services          │
+│  🔐 Sem portas abertas    Apenas SSH (22) aberto na OCI                │
+│  🛡️  Zero Trust ZTNA      Autenticação por serviço                      │
+│  🔑 Service Tokens        K3s pods se autenticam automaticamente        │
+│  🌐 DNS-based access      ollama.seudominio.com (sem IPs)              │
+│  📊 Logs centralizados    Dashboard Cloudflare                          │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -99,18 +107,20 @@ Ideal para conectar seu cluster Kubernetes local à nuvem OCI, permitindo que se
 - **Virtual Cloud Network (VCN)** Classe B com CIDR 172.16.0.0/12 (IPv6 desabilitado)
 - **Internet Gateway** para acesso à internet
 - **Subnet pública** (172.16.1.0/24)
-- **Security List** com regras para SSH, HTTP, HTTPS, OpenVPN e Ollama
+- **Security List** com regras mínimas (SSH, HTTP, HTTPS, ICMP)
 - **Instância ARM A1.Flex** (4 OCPUs, 24GB RAM) com Oracle Linux 8 - Always Free
-- **Servidor OpenVPN** configurado para site-to-site VPN
-- **Ollama** rodando na porta 11434
+- **cloudflared** (Cloudflare Tunnel) instalado e pronto para configurar
+- **Ollama** rodando na porta 11434 (acesso via Cloudflare Tunnel apenas)
 - **Docker** e Docker Compose instalados
 
 ## Pré-requisitos
 
 1. Conta na Oracle Cloud Infrastructure
-2. Terraform >= 1.0 instalado
-3. Credenciais OCI configuradas (API Key)
-4. Par de chaves SSH para acesso à instância
+2. **Conta Cloudflare** (plano Free suficiente)
+3. **Domínio** configurado no Cloudflare
+4. Terraform >= 1.0 instalado
+5. Credenciais OCI configuradas (API Key)
+6. Par de chaves SSH para acesso à instância
 
 ## Configuração Inicial
 
@@ -179,9 +189,9 @@ Após o apply, o Terraform exibirá o IP público e o comando SSH:
 ssh opc@<PUBLIC_IP>
 ```
 
-### Configurar VPN Site-to-Site com K3s
+### Configurar Cloudflare Tunnel
 
-**Para guia completo, veja [SETUP_SITE_TO_SITE.md](SETUP_SITE_TO_SITE.md)**
+**Para guia completo, veja [SETUP_CLOUDFLARE_TUNNEL.md](SETUP_CLOUDFLARE_TUNNEL.md)**
 
 Resumo rápido:
 
@@ -189,23 +199,33 @@ Resumo rápido:
 # 1. SSH na instância OCI
 ssh opc@<PUBLIC_IP>
 
-# 2. Gerar certificado para o cluster K3s
-sudo /root/generate-client-config.sh k3s-cluster
+# 2. Autenticar com Cloudflare
+cloudflared tunnel login
 
-# 3. Configurar roteamento site-to-site (sua rede local)
-sudo /root/setup-site-to-site.sh k3s-cluster 192.168.0.0/24
+# 3. Criar tunnel
+cloudflared tunnel create oci-tunnel
 
-# 4. Baixar configuração (do seu computador local)
-scp opc@<PUBLIC_IP>:/root/client-configs/k3s-cluster.ovpn .
+# 4. Configurar (copiar e editar exemplo)
+cp /root/cloudflared-config-example.yml ~/.cloudflared/config.yml
+vim ~/.cloudflared/config.yml
 
-# 5. Instalar na Raspberry Pi (gateway do K3s)
-# Copie o arquivo para a Raspberry Pi e configure conforme SETUP_SITE_TO_SITE.md
+# 5. Configurar DNS
+cloudflared tunnel route dns oci-tunnel ollama.seudominio.com
+
+# 6. Rodar tunnel
+cloudflared tunnel run oci-tunnel
+
+# 7. Instalar como serviço (após testar)
+sudo cloudflared service install
+sudo systemctl enable cloudflared
+sudo systemctl start cloudflared
+
 ```
 
 Após configurar, seu cluster K3s poderá acessar:
-- Ollama: `http://172.16.1.x:11434`
-- Serviços Docker na OCI
-- Toda a rede OCI (172.16.0.0/12)
+- Ollama: `https://ollama.seudominio.com`
+- Serviços Docker na OCI via hostnames
+- Acesso via Zero Trust (sem IPs, sem portas abertas)
 
 ### Verificar Serviços
 
@@ -213,9 +233,9 @@ Após configurar, seu cluster K3s poderá acessar:
 # SSH na instância
 ssh opc@<PUBLIC_IP>
 
-# Verificar OpenVPN
-sudo systemctl status openvpn-server@server
-sudo cat /var/log/openvpn/openvpn-status.log
+# Verificar Cloudflare Tunnel
+sudo systemctl status cloudflared
+sudo journalctl -u cloudflared -n 20
 
 # Verificar Ollama
 sudo systemctl status ollama
@@ -228,6 +248,9 @@ docker ps
 # Baixar e testar um modelo Ollama
 ollama pull llama3.2:1b
 ollama run llama3.2:1b "Hello!"
+
+# Testar acesso via Cloudflare Tunnel (de fora)
+curl https://ollama.seudominio.com/api/version
 ```
 
 ### Destruir Infraestrutura
@@ -240,16 +263,16 @@ terraform destroy
 
 ```
 .
-├── provider.tf              # Configuração do provider OCI
-├── variables.tf             # Declaração de variáveis
-├── terraform.tfvars.example # Exemplo de valores de variáveis
-├── network.tf               # Recursos de rede (VCN, subnet, etc)
-├── compute.tf               # Instâncias de computação
-├── cloud-init.yaml          # Script de inicialização (OpenVPN + Ollama + Docker)
-├── outputs.tf               # Valores de saída
-├── README.md                # Este arquivo (documentação principal)
-├── CLAUDE.md                # Documentação para Claude Code
-└── SETUP_SITE_TO_SITE.md    # Guia detalhado de configuração VPN
+├── provider.tf                  # Configuração do provider OCI
+├── variables.tf                 # Declaração de variáveis
+├── terraform.tfvars.example     # Exemplo de valores de variáveis
+├── network.tf                   # Recursos de rede (VCN, subnet, etc)
+├── compute.tf                   # Instâncias de computação
+├── cloud-init.yaml              # Script de inicialização (cloudflared + Ollama + Docker)
+├── outputs.tf                   # Valores de saída
+├── README.md                    # Este arquivo (documentação principal)
+├── CLAUDE.md                    # Documentação para Claude Code
+└── SETUP_CLOUDFLARE_TUNNEL.md   # Guia detalhado de configuração Cloudflare Tunnel
 ```
 
 ## Personalização
@@ -273,12 +296,25 @@ instance_ocpus = 2
 instance_memory_in_gbs = 16
 ```
 
-### Alterar Porta do OpenVPN
+### Adicionar Mais Serviços ao Tunnel
 
-Edite em `terraform.tfvars`:
+Edite `~/.cloudflared/config.yml` na instância OCI:
 
-```hcl
-openvpn_port = 443  # Usar porta HTTPS, útil em redes restritas
+```yaml
+ingress:
+  - hostname: ollama.seudominio.com
+    service: http://localhost:11434
+
+  # Adicionar novo serviço
+  - hostname: app.seudominio.com
+    service: http://localhost:8080
+
+  - service: http_status:404
+```
+
+E configure o DNS:
+```bash
+cloudflared tunnel route dns oci-tunnel app.seudominio.com
 ```
 
 ### Alterar Região
@@ -302,16 +338,19 @@ Esta configuração utiliza recursos Always Free da OCI:
 
 ## Segurança
 
-⚠️ **Atenção**: A configuração padrão permite SSH, HTTP, HTTPS e OpenVPN de qualquer origem (0.0.0.0/0). Para produção:
-- Restrinja o acesso SSH apenas ao seu IP
-- Restrinja o acesso OpenVPN aos IPs necessários
-- Edite a Security List em `network.tf`
+✅ **Com Cloudflare Tunnel:**
+- Ollama e serviços Docker **não estão** expostos diretamente (sem portas abertas)
+- Apenas SSH (22) está acessível publicamente
+- Todo tráfego passa pelo Zero Trust da Cloudflare
+- Autenticação e autorização por serviço
+- TLS/HTTPS automático via Cloudflare
 
-**Boas práticas para OpenVPN:**
-- Gere certificados únicos para cada cliente
-- Revogue certificados de clientes removidos
-- Use senhas fortes para proteção adicional dos certificados
-- Monitore logs em `/var/log/openvpn/`
+**Boas práticas recomendadas:**
+- Configure políticas Zero Trust no dashboard Cloudflare
+- Use Service Tokens para acesso programático (K3s)
+- Restrinja SSH apenas ao seu IP editando `network.tf`
+- Monitore logs no dashboard Cloudflare
+- Habilite autenticação para serviços sensíveis
 
 ## Troubleshooting
 
@@ -331,61 +370,67 @@ Instâncias ARM A1 são muito procuradas. Se receber erro de capacidade:
 
 Verifique os limites da sua conta OCI para o compartment e região selecionados.
 
-### OpenVPN não inicia
+### Cloudflare Tunnel não conecta
 
 ```bash
 # Verificar logs
-sudo journalctl -u openvpn-server@server -f
+sudo journalctl -u cloudflared -n 50
+
+# Testar manualmente
+cloudflared tunnel run oci-tunnel
 
 # Verificar configuração
-sudo openvpn --config /etc/openvpn/server/server.conf
+cat ~/.cloudflared/config.yml
+
+# Verificar se o tunnel existe
+cloudflared tunnel list
 
 # Reiniciar serviço
-sudo systemctl restart openvpn-server@server
+sudo systemctl restart cloudflared
 ```
 
-### Não consigo conectar à VPN
+### Não consigo acessar serviços via Cloudflare
 
-1. Verifique se o firewall está configurado:
+1. Verifique se o DNS está configurado:
    ```bash
-   sudo firewall-cmd --list-all
+   dig ollama.seudominio.com
+   # Deve retornar CNAME para o tunnel
    ```
 
-2. Verifique se o IP forwarding está ativo:
+2. Verifique políticas Zero Trust no dashboard Cloudflare
+
+3. Teste acesso local primeiro:
    ```bash
-   sudo sysctl net.ipv4.ip_forward
+   curl http://localhost:11434/api/version
    ```
 
-3. Verifique logs do cliente OpenVPN
-
-4. Teste conectividade na porta:
-   ```bash
-   nc -zvu <PUBLIC_IP> 1194
-   ```
+4. Verifique se o serviço está no config.yml do tunnel
 
 ## Comandos Úteis
 
-### OpenVPN
+### Cloudflare Tunnel
 
 ```bash
-# Gerar certificado para novo cliente
-sudo /root/generate-client-config.sh client2
+# Listar tunnels
+cloudflared tunnel list
 
-# Configurar site-to-site para nova rede
-sudo /root/setup-site-to-site.sh client2 10.0.0.0/24
+# Ver informações do tunnel
+cloudflared tunnel info oci-tunnel
 
-# Verificar clientes conectados
-sudo cat /var/log/openvpn/openvpn-status.log
+# Adicionar novo hostname
+cloudflared tunnel route dns oci-tunnel app.seudominio.com
 
-# Revogar certificado de cliente
-cd /usr/share/easy-rsa/3
-sudo ./easyrsa revoke client1
-sudo ./easyrsa gen-crl
-sudo cp pki/crl.pem /etc/openvpn/server/
-sudo systemctl restart openvpn-server@server
+# Ver rotas DNS configuradas
+cloudflared tunnel route dns
 
-# Verificar logs em tempo real
-sudo tail -f /var/log/openvpn/openvpn.log
+# Limpar credenciais (re-authenticate)
+rm ~/.cloudflared/cert.pem
+cloudflared tunnel login
+
+# Atualizar cloudflared
+wget -O /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64
+chmod +x /usr/local/bin/cloudflared
+sudo systemctl restart cloudflared
 ```
 
 ### Ollama
