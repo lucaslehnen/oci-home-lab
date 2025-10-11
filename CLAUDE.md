@@ -256,3 +256,4 @@ docker run -d -p 8080:80 nginx
 10. Pull Ollama models: `ollama pull llama3.2:1b`
 
 **See SETUP_CLOUDFLARE_TUNNEL.md for detailed configuration guide**
+- use a chave ssh em ~/.ssh/oci_instance

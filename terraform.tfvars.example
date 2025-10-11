@@ -8,3 +8,9 @@ region             = "sa-saopaulo-1"
 compartment_ocid   = "ocid1.compartment.oc1..example"
 availability_domain = "WrbL:SA-SAOPAULO-1-AD-1"
 ssh_public_key     = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC..."
+
+# Optional: Boot volume size in GBs (default: 50GB, Always Free allows up to 200GB total)
+# boot_volume_size_in_gbs = 50
+
+# Optional: Additional block volume size in GBs (default: 100GB, Always Free allows up to 200GB total across all volumes)
+# block_volume_size_in_gbs = 100

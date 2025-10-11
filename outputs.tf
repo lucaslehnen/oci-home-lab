@@ -56,3 +56,24 @@ output "ollama_info" {
     test_command    = "curl http://localhost:11434/api/version"
   }
 }
+
+output "block_volume_id" {
+  description = "OCID of the block volume"
+  value       = oci_core_volume.data.id
+}
+
+output "block_volume_mount_instructions" {
+  description = "Instructions to mount the block volume"
+  value = [
+    "1. SSH into instance: ssh opc@${oci_core_instance.main.public_ip}",
+    "2. List attached devices: lsblk",
+    "3. Find the new device (usually /dev/sdb or /dev/oracleoci/oraclevdb)",
+    "4. Create filesystem: sudo mkfs.ext4 /dev/sdb",
+    "5. Create mount point: sudo mkdir -p /mnt/data",
+    "6. Mount volume: sudo mount /dev/sdb /mnt/data",
+    "7. Set permissions: sudo chown -R opc:opc /mnt/data",
+    "8. Add to fstab for auto-mount:",
+    "   echo '/dev/sdb /mnt/data ext4 defaults,_netdev,nofail 0 2' | sudo tee -a /etc/fstab",
+    "9. Verify: df -h /mnt/data"
+  ]
+}

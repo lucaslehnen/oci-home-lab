@@ -57,3 +57,15 @@ variable "instance_memory_in_gbs" {
   default     = 6
 }
 
+variable "boot_volume_size_in_gbs" {
+  description = "Size of the boot volume in GBs (default: 50GB, Always Free tier allows up to 200GB total)"
+  type        = number
+  default     = 50
+}
+
+variable "block_volume_size_in_gbs" {
+  description = "Size of the additional block volume in GBs (Always Free tier allows up to 200GB total across all volumes)"
+  type        = number
+  default     = 100
+}
+

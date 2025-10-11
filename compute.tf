@@ -22,8 +22,9 @@ resource "oci_core_instance" "main" {
   }
 
   source_details {
-    source_type = "image"
-    source_id   = data.oci_core_images.oracle_linux_arm.images[0].id
+    source_type             = "image"
+    source_id               = data.oci_core_images.oracle_linux_arm.images[0].id
+    boot_volume_size_in_gbs = var.boot_volume_size_in_gbs
   }
 
   create_vnic_details {
