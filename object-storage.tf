@@ -1,6 +1,6 @@
 # Object Storage Bucket for Backups
 # Tier: Standard (default)
-# Lifecycle: Objects move to Archive after 1 week
+# Lifecycle: Objects move to Archive after 1 week, deleted after 30 days
 
 resource "oci_objectstorage_bucket" "backups" {
   compartment_id = var.compartment_ocid
@@ -19,6 +19,15 @@ resource "oci_objectstorage_object_lifecycle_policy" "backups_lifecycle" {
     action      = "ARCHIVE"
     target      = "objects"
     time_amount = 7
+    time_unit   = "DAYS"
+    is_enabled  = true
+  }
+
+  rules {
+    name        = "delete_after_30_days"
+    action      = "DELETE"
+    target      = "objects"
+    time_amount = 30
     time_unit   = "DAYS"
     is_enabled  = true
   }
